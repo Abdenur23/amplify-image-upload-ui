@@ -11,7 +11,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      height: 100vh;
+      min-height: 100vh;
       background: #f5f5f5;
     }
     .upload-box {
@@ -20,6 +20,7 @@
       border-radius: 12px;
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
       text-align: center;
+      width: 350px;
     }
     input[type=file] {
       margin: 15px 0;
@@ -32,65 +33,109 @@
       border-radius: 8px;
       cursor: pointer;
     }
-    button:hover {
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    button:hover:enabled {
       background: #005fa3;
     }
     #status {
       margin-top: 20px;
       color: green;
+      font-size: 0.95em;
+      line-height: 1.4;
+      text-align: left;
+    }
+    .privacy-box {
+      margin-top: 10px;
+      text-align: left;
+      font-size: 0.9em;
+      color: #444;
     }
   </style>
 </head>
 <body>
   <div class="upload-box">
-    <h2>Upload Image to S3</h2>
-    <input type="file" id="fileInput" accept="image/*" />
-    <button onclick="uploadImage()">Upload</button>
+    <h2>Upload 3 Images to S3</h2>
+
+    <div class="privacy-box">
+      <p><strong>Privacy Policy</strong></p>
+      <p>Your uploaded images are processed securely and stored privately in our system. We do not share, sell, or publish your data. By checking this box, you acknowledge and consent to our terms.</p>
+      <label>
+        <input type="checkbox" id="privacyCheck" onchange="toggleInput()" />
+        I have read and agree to the Privacy Policy.
+      </label>
+    </div>
+
+    <input type="file" id="fileInput" accept="image/*" multiple disabled />
+    <p><small>Please select exactly 3 images.</small></p>
+
+    <button id="uploadBtn" onclick="uploadImages()" disabled>Upload All</button>
     <div id="status"></div>
   </div>
 
   <script>
     const API_ENDPOINT = "https://2zv7gblrv5.execute-api.us-east-1.amazonaws.com/first_stage/generate-presigned-url";
 
-    async function uploadImage() {
+    function toggleInput() {
+      const check = document.getElementById("privacyCheck").checked;
+      document.getElementById("fileInput").disabled = !check;
+      document.getElementById("uploadBtn").disabled = !check;
+    }
+
+    async function uploadImages() {
       const fileInput = document.getElementById("fileInput");
       const statusDiv = document.getElementById("status");
-      if (!fileInput.files.length) {
-        alert("Please choose a file first!");
+      const files = Array.from(fileInput.files);
+
+      statusDiv.textContent = "";
+
+      if (files.length !== 3) {
+        alert("You must select exactly 3 images.");
         return;
       }
 
-      const file = fileInput.files[0];
-      statusDiv.textContent = "Requesting upload URL...";
+      statusDiv.textContent = "Requesting upload URLs...";
 
       try {
-        // Step 1: Get presigned URL
+        // Step 1: Request presigned URLs for all 3 images
+        const filePayload = files.map(f => ({
+          fileName: f.name,
+          contentType: f.type
+        }));
+
         const response = await fetch(API_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: file.name,
-            contentType: file.type
-          })
+          body: JSON.stringify({ files: filePayload })
         });
 
         const data = await response.json();
-        const uploadURL = data.uploadURL;
-        if (!uploadURL) throw new Error("No upload URL received.");
-
-        // Step 2: Upload file directly to S3
-        statusDiv.textContent = "Uploading to S3...";
-        const upload = await fetch(uploadURL, {
-          method: "PUT",
-          headers: { "Content-Type": file.type },
-          body: file
-        });
-
-        if (upload.status === 200) {
-          statusDiv.textContent = "✅ Upload successful!";
-        } else {
-          statusDiv.textContent = "❌ Upload failed (" + upload.status + ")";
+        if (!data.urls || data.urls.length !== 3) {
+          throw new Error(data.error || "Unexpected response from server.");
         }
+
+        // Step 2: Upload each file to its presigned URL
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const urlData = data.urls[i];
+          statusDiv.textContent += `\nUploading ${file.name}...`;
+
+          const upload = await fetch(urlData.uploadURL, {
+            method: "PUT",
+            headers: { "Content-Type": file.type },
+            body: file
+          });
+
+          if (upload.status === 200) {
+            statusDiv.textContent += ` ✅ (${file.name} uploaded)\n`;
+          } else {
+            statusDiv.textContent += ` ❌ (${file.name} failed - ${upload.status})\n`;
+          }
+        }
+
+        statusDiv.textContent += "\nAll uploads attempted.";
       } catch (err) {
         console.error(err);
         statusDiv.textContent = "Error: " + err.message;
